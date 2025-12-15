@@ -37,12 +37,125 @@
             top: 0;
             left: 0;
         }
+
+        #ui-overlay {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            pointer-events: none;
+            z-index: 1000;
+            font-family: 'Arial', sans-serif;
+        }
+
+        .ui-indicator {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            padding: 15px 20px;
+            border-radius: 15px;
+            margin-bottom: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .ui-label {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .ui-value {
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .color-preview {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            box-shadow: 0 0 15px currentColor;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .size-bar {
+            width: 120px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .size-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00ffff, #ff00ff);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        #start-hint {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 16px;
+            text-align: center;
+            pointer-events: none;
+            z-index: 999;
+            opacity: 0;
+            transition: opacity 0.5s;
+            font-family: 'Arial', sans-serif;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        #start-hint.show {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
     <div id="container">
         <video id="video" playsinline autoplay muted></video>
         <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="ui-overlay">
+        <div class="ui-indicator">
+            <div class="ui-label">Color</div>
+            <div class="ui-value">
+                <div class="color-preview" id="colorPreview"></div>
+                <span id="colorName">Red</span>
+            </div>
+        </div>
+        <div class="ui-indicator">
+            <div class="ui-label">Dot Size</div>
+            <div class="ui-value">
+                <div class="size-bar">
+                    <div class="size-bar-fill" id="sizeBarFill"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="start-hint" class="show">
+        <div style="font-size: 24px; margin-bottom: 10px;">✋ Gesture Controls</div>
+        <div style="margin-bottom: 5px;">Left Hand Pinch → Adjust Dot Size</div>
+        <div>Right Hand Swipe → Change Colors</div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
@@ -55,18 +168,18 @@
 
         // High saturation colors on RGB color wheel
         const colors = [
-            { r: 255, g: 0, b: 0 },      // Red
-            { r: 255, g: 128, b: 0 },    // Orange
-            { r: 255, g: 255, b: 0 },    // Yellow
-            { r: 128, g: 255, b: 0 },    // Lime
-            { r: 0, g: 255, b: 0 },      // Green
-            { r: 0, g: 255, b: 128 },    // Spring Green
-            { r: 0, g: 255, b: 255 },    // Cyan
-            { r: 0, g: 128, b: 255 },    // Azure
-            { r: 0, g: 0, b: 255 },      // Blue
-            { r: 128, g: 0, b: 255 },    // Violet
-            { r: 255, g: 0, b: 255 },    // Magenta
-            { r: 255, g: 0, b: 128 }     // Rose
+            { r: 255, g: 0, b: 0, name: 'Red' },
+            { r: 255, g: 128, b: 0, name: 'Orange' },
+            { r: 255, g: 255, b: 0, name: 'Yellow' },
+            { r: 128, g: 255, b: 0, name: 'Lime' },
+            { r: 0, g: 255, b: 0, name: 'Green' },
+            { r: 0, g: 255, b: 128, name: 'Spring Green' },
+            { r: 0, g: 255, b: 255, name: 'Cyan' },
+            { r: 0, g: 128, b: 255, name: 'Azure' },
+            { r: 0, g: 0, b: 255, name: 'Blue' },
+            { r: 128, g: 0, b: 255, name: 'Violet' },
+            { r: 255, g: 0, b: 255, name: 'Magenta' },
+            { r: 255, g: 0, b: 128, name: 'Rose' }
         ];
 
         // State variables
@@ -149,16 +262,79 @@
                 const radius = (size / 2) * effectiveBrightness * 0.95;
 
                 if (radius > 0.5) {
-                    ctx.fillStyle = `rgb(${Math.floor(this.color.r)}, ${Math.floor(this.color.g)}, ${Math.floor(this.color.b)})`;
-                    ctx.beginPath();
-                    ctx.arc(
-                        this.baseX + this.offsetX,
-                        this.baseY + this.offsetY,
-                        radius,
-                        0,
-                        Math.PI * 2
+                    const centerX = this.baseX + this.offsetX;
+                    const centerY = this.baseY + this.offsetY;
+
+                    // Outer glow effect
+                    if (effectiveBrightness > 0.3) {
+                        const glowGradient = ctx.createRadialGradient(
+                            centerX, centerY, 0,
+                            centerX, centerY, radius * 2.5
+                        );
+                        glowGradient.addColorStop(0, `rgba(${Math.floor(this.color.r)}, ${Math.floor(this.color.g)}, ${Math.floor(this.color.b)}, ${effectiveBrightness * 0.4})`);
+                        glowGradient.addColorStop(0.5, `rgba(${Math.floor(this.color.r)}, ${Math.floor(this.color.g)}, ${Math.floor(this.color.b)}, ${effectiveBrightness * 0.15})`);
+                        glowGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+                        ctx.fillStyle = glowGradient;
+                        ctx.beginPath();
+                        ctx.arc(centerX, centerY, radius * 2.5, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+
+                    // Main dot with gradient
+                    const dotGradient = ctx.createRadialGradient(
+                        centerX - radius * 0.3, centerY - radius * 0.3, 0,
+                        centerX, centerY, radius
                     );
+
+                    const brighterR = Math.min(255, this.color.r + 60);
+                    const brighterG = Math.min(255, this.color.g + 60);
+                    const brighterB = Math.min(255, this.color.b + 60);
+
+                    dotGradient.addColorStop(0, `rgb(${brighterR}, ${brighterG}, ${brighterB})`);
+                    dotGradient.addColorStop(1, `rgb(${Math.floor(this.color.r)}, ${Math.floor(this.color.g)}, ${Math.floor(this.color.b)})`);
+
+                    ctx.fillStyle = dotGradient;
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
                     ctx.fill();
+                }
+            }
+        }
+
+        // Particle trail system
+        let particles = [];
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = { ...color };
+                this.life = 1;
+                this.size = Math.random() * 3 + 1;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= 0.02;
+                this.vx *= 0.95;
+                this.vy *= 0.95;
+            }
+
+            draw(ctx) {
+                if (this.life > 0) {
+                    ctx.globalAlpha = this.life * 0.6;
+                    const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size);
+                    gradient.addColorStop(0, `rgb(${this.color.r}, ${this.color.g}, ${this.color.b})`);
+                    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
                 }
             }
         }
@@ -451,13 +627,66 @@
             return 0;
         }
 
+        // Draw ripples visualization
+        function drawRipples(ctx) {
+            ripples.forEach(ripple => {
+                ctx.globalAlpha = ripple.life * 0.3;
+                ctx.strokeStyle = `rgb(${currentColor.r}, ${currentColor.g}, ${currentColor.b})`;
+                ctx.lineWidth = 2 + ripple.intensity * 2;
+                ctx.beginPath();
+                ctx.arc(ripple.x, ripple.y, ripple.radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            });
+        }
+
+        // Draw background with gradient
+        function drawBackground(ctx, volume) {
+            const time = Date.now() * 0.001;
+            const pulse = Math.sin(time * 2) * 0.5 + 0.5;
+            const volumePulse = volume * 0.3;
+
+            const gradient = ctx.createRadialGradient(
+                canvas.width / 2, canvas.height / 2, 0,
+                canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) * 0.8
+            );
+
+            const dimmedR = Math.floor(currentColor.r * (0.05 + volumePulse + pulse * 0.03));
+            const dimmedG = Math.floor(currentColor.g * (0.05 + volumePulse + pulse * 0.03));
+            const dimmedB = Math.floor(currentColor.b * (0.05 + volumePulse + pulse * 0.03));
+
+            gradient.addColorStop(0, `rgba(${dimmedR}, ${dimmedG}, ${dimmedB}, 0.3)`);
+            gradient.addColorStop(0.5, `rgba(${Math.floor(dimmedR * 0.5)}, ${Math.floor(dimmedG * 0.5)}, ${Math.floor(dimmedB * 0.5)}, 0.15)`);
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 1)');
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // Update UI indicators
+        function updateUI() {
+            const colorPreview = document.getElementById('colorPreview');
+            const colorName = document.getElementById('colorName');
+            const sizeBarFill = document.getElementById('sizeBarFill');
+
+            const color = colors[currentColorIndex];
+            colorPreview.style.backgroundColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
+            colorPreview.style.color = `rgb(${color.r}, ${color.g}, ${color.b})`;
+            colorName.textContent = color.name;
+
+            const sizePercent = ((dotSize - minDotSize) / (maxDotSize - minDotSize)) * 100;
+            sizeBarFill.style.width = `${sizePercent}%`;
+        }
+
         // Main render loop
         async function render() {
             if (!isRunning) return;
 
-            // Clear canvas
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Get audio volume first
+            currentVolume = getVolume();
+
+            // Draw background with gradient and pulse
+            drawBackground(ctx, currentVolume);
 
             // Smooth dot size transition
             const prevDotSize = dotSize;
@@ -480,8 +709,15 @@
                 }
             }
 
-            // Get audio volume
-            currentVolume = getVolume();
+            // Update UI
+            updateUI();
+
+            // Update and draw particles
+            particles = particles.filter(p => {
+                p.update();
+                p.draw(ctx);
+                return p.life > 0;
+            });
 
             // Process video
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
@@ -533,9 +769,27 @@
                     const brightness = getBrightness(dot.baseX, dot.baseY, imageData);
                     const rippleValue = getRippleValue(dot.baseX, dot.baseY);
 
+                    // Store previous offset for particle trail
+                    const prevOffsetX = dot.offsetX;
+                    const prevOffsetY = dot.offsetY;
+
                     dot.update(brightness, currentVolume, rippleValue);
+
+                    // Generate particles for high-energy dots
+                    const combinedIntensity = Math.max(currentVolume, motionIntensity * 0.5);
+                    if (combinedIntensity > 0.3 && brightness > 0.5 && Math.random() < 0.05) {
+                        particles.push(new Particle(
+                            dot.baseX + dot.offsetX,
+                            dot.baseY + dot.offsetY,
+                            dot.color
+                        ));
+                    }
+
                     dot.draw(ctx, dotSize);
                 });
+
+                // Draw ripples on top
+                drawRipples(ctx);
 
                 // Process hands
                 await hands.send({ image: video });
@@ -584,6 +838,12 @@
 
             // Init audio (optional)
             await initAudio();
+
+            // Hide hint after 5 seconds
+            setTimeout(() => {
+                const hint = document.getElementById('start-hint');
+                hint.classList.remove('show');
+            }, 5000);
 
             // Start rendering
             isRunning = true;
