@@ -37,407 +37,70 @@
             top: 0;
             left: 0;
         }
-
-        #ui-overlay {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            pointer-events: none;
-            z-index: 1000;
-            font-family: 'Arial', sans-serif;
-        }
-
-        .ui-indicator {
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(10px);
-            padding: 15px 20px;
-            border-radius: 15px;
-            margin-bottom: 10px;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-        }
-
-        .ui-label {
-            color: rgba(255, 255, 255, 0.7);
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 5px;
-        }
-
-        .ui-value {
-            color: #fff;
-            font-size: 18px;
-            font-weight: bold;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .color-preview {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            box-shadow: 0 0 15px currentColor;
-            animation: pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-
-        .size-bar {
-            width: 120px;
-            height: 8px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 4px;
-            overflow: hidden;
-            position: relative;
-        }
-
-        .size-bar-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #00ffff, #ff00ff);
-            border-radius: 4px;
-            transition: width 0.3s ease;
-            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
-        }
-
-        #start-hint {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: rgba(255, 255, 255, 0.8);
-            font-size: 16px;
-            text-align: center;
-            pointer-events: none;
-            z-index: 999;
-            opacity: 0;
-            transition: opacity 0.5s;
-            font-family: 'Arial', sans-serif;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 20px 40px;
-            border-radius: 20px;
-            backdrop-filter: blur(10px);
-        }
-
-        #start-hint.show {
-            opacity: 1;
-        }
     </style>
 </head>
 <body>
     <div id="container">
         <video id="video" playsinline autoplay muted></video>
         <canvas id="canvas"></canvas>
-    </div>
-
-    <div id="ui-overlay">
-        <div class="ui-indicator">
-            <div class="ui-label">Color</div>
-            <div class="ui-value">
-                <div class="color-preview" id="colorPreview"></div>
-                <span id="colorName">Red</span>
-            </div>
-        </div>
-        <div class="ui-indicator">
-            <div class="ui-label">Dot Size</div>
-            <div class="ui-value">
-                <div class="size-bar">
-                    <div class="size-bar-fill" id="sizeBarFill"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="start-hint" class="show">
-        <div style="font-size: 24px; margin-bottom: 10px;">✋ Gesture Controls</div>
-        <div style="margin-bottom: 5px;">Left Hand Pinch → Adjust Dot Size</div>
-        <div>Right Hand Swipe → Change Colors</div>
+        <canvas id="prevFrame" style="display:none;"></canvas>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
 
     <script>
-        // Global elements
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
+        const prevFrameCanvas = document.getElementById('prevFrame');
+        const prevCtx = prevFrameCanvas.getContext('2d');
 
         // High saturation colors on RGB color wheel
         const colors = [
-            { r: 255, g: 0, b: 0, name: 'Red' },
-            { r: 255, g: 128, b: 0, name: 'Orange' },
-            { r: 255, g: 255, b: 0, name: 'Yellow' },
-            { r: 128, g: 255, b: 0, name: 'Lime' },
-            { r: 0, g: 255, b: 0, name: 'Green' },
-            { r: 0, g: 255, b: 128, name: 'Spring Green' },
-            { r: 0, g: 255, b: 255, name: 'Cyan' },
-            { r: 0, g: 128, b: 255, name: 'Azure' },
-            { r: 0, g: 0, b: 255, name: 'Blue' },
-            { r: 128, g: 0, b: 255, name: 'Violet' },
-            { r: 255, g: 0, b: 255, name: 'Magenta' },
-            { r: 255, g: 0, b: 128, name: 'Rose' }
+            [255, 0, 0],     // Red
+            [255, 128, 0],   // Orange
+            [255, 255, 0],   // Yellow
+            [128, 255, 0],   // Lime
+            [0, 255, 0],     // Green
+            [0, 255, 128],   // Spring Green
+            [0, 255, 255],   // Cyan
+            [0, 128, 255],   // Azure
+            [0, 0, 255],     // Blue
+            [128, 0, 255],   // Violet
+            [255, 0, 255],   // Magenta
+            [255, 0, 128]    // Rose
         ];
 
-        // State variables
         let currentColorIndex = 0;
         let targetColorIndex = 0;
         let colorTransition = 0;
-        let currentColor = { ...colors[0] };
+        let currentColor = [...colors[0]];
 
-        let dotSize = 10;
-        let targetDotSize = 10;
+        let dotSize = 8;
+        let targetDotSize = 8;
         const minDotSize = 4;
-        const maxDotSize = 24;
+        const maxDotSize = 20;
 
-        let dots = [];
-        let isRunning = false;
-        let currentVolume = 0;
-
-        // Audio variables
-        let audioContext, analyser, microphone, dataArray;
-        let audioSensitivity = 2.0;
+        let motionData = [];
+        let ripples = [];
 
         // Hand tracking state
+        let leftHandPinchDist = null;
         let leftHandPrevPinchDist = null;
         let rightHandPrevPos = null;
         let swipeCooldown = 0;
 
-        // Motion detection
-        let prevImageData = null;
-        let motionIntensity = 0;
-
-        // Video processing canvas
-        let videoCanvas, videoCtx;
-
-        // Dot class - each dot is an independent element
-        class Dot {
-            constructor(x, y, size) {
-                this.x = x;
-                this.y = y;
-                this.baseX = x;
-                this.baseY = y;
-                this.size = size;
-                this.brightness = 0;
-                this.targetBrightness = 0;
-                this.color = { ...currentColor };
-                this.offsetX = 0;
-                this.offsetY = 0;
-                this.vibrationPhase = Math.random() * Math.PI * 2;
-                this.rippleOffset = 0;
-            }
-
-            update(brightness, volume, rippleValue) {
-                // Smooth brightness transition
-                this.targetBrightness = brightness;
-                this.brightness += (this.targetBrightness - this.brightness) * 0.3;
-
-                // Smooth color transition
-                this.color.r += (currentColor.r - this.color.r) * 0.15;
-                this.color.g += (currentColor.g - this.color.g) * 0.15;
-                this.color.b += (currentColor.b - this.color.b) * 0.15;
-
-                // Ripple offset
-                this.rippleOffset = rippleValue;
-
-                // Vibration effect based on volume
-                const combinedIntensity = Math.max(volume, motionIntensity * 0.5);
-                if (combinedIntensity > 0.05) {
-                    const vibrationIntensity = combinedIntensity * 4;
-                    this.vibrationPhase += 0.2 + combinedIntensity * 0.3;
-                    this.offsetX = Math.sin(this.vibrationPhase) * vibrationIntensity;
-                    this.offsetY = Math.cos(this.vibrationPhase * 1.3) * vibrationIntensity;
-                } else {
-                    // Smoothly return to original position
-                    this.offsetX *= 0.85;
-                    this.offsetY *= 0.85;
-                }
-            }
-
-            draw(ctx, size) {
-                const effectiveBrightness = Math.max(0, Math.min(1, this.brightness + this.rippleOffset * 0.1));
-                const radius = (size / 2) * effectiveBrightness * 0.95;
-
-                if (radius > 0.5) {
-                    const centerX = this.baseX + this.offsetX;
-                    const centerY = this.baseY + this.offsetY;
-
-                    // Outer glow effect
-                    if (effectiveBrightness > 0.3) {
-                        const glowGradient = ctx.createRadialGradient(
-                            centerX, centerY, 0,
-                            centerX, centerY, radius * 2.5
-                        );
-                        glowGradient.addColorStop(0, `rgba(${Math.floor(this.color.r)}, ${Math.floor(this.color.g)}, ${Math.floor(this.color.b)}, ${effectiveBrightness * 0.4})`);
-                        glowGradient.addColorStop(0.5, `rgba(${Math.floor(this.color.r)}, ${Math.floor(this.color.g)}, ${Math.floor(this.color.b)}, ${effectiveBrightness * 0.15})`);
-                        glowGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-                        ctx.fillStyle = glowGradient;
-                        ctx.beginPath();
-                        ctx.arc(centerX, centerY, radius * 2.5, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-
-                    // Main dot with gradient
-                    const dotGradient = ctx.createRadialGradient(
-                        centerX - radius * 0.3, centerY - radius * 0.3, 0,
-                        centerX, centerY, radius
-                    );
-
-                    const brighterR = Math.min(255, this.color.r + 60);
-                    const brighterG = Math.min(255, this.color.g + 60);
-                    const brighterB = Math.min(255, this.color.b + 60);
-
-                    dotGradient.addColorStop(0, `rgb(${brighterR}, ${brighterG}, ${brighterB})`);
-                    dotGradient.addColorStop(1, `rgb(${Math.floor(this.color.r)}, ${Math.floor(this.color.g)}, ${Math.floor(this.color.b)})`);
-
-                    ctx.fillStyle = dotGradient;
-                    ctx.beginPath();
-                    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-        }
-
-        // Particle trail system
-        let particles = [];
-
-        class Particle {
-            constructor(x, y, color) {
-                this.x = x;
-                this.y = y;
-                this.color = { ...color };
-                this.life = 1;
-                this.size = Math.random() * 3 + 1;
-                this.vx = (Math.random() - 0.5) * 2;
-                this.vy = (Math.random() - 0.5) * 2;
-            }
-
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-                this.life -= 0.02;
-                this.vx *= 0.95;
-                this.vy *= 0.95;
-            }
-
-            draw(ctx) {
-                if (this.life > 0) {
-                    ctx.globalAlpha = this.life * 0.6;
-                    const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size);
-                    gradient.addColorStop(0, `rgb(${this.color.r}, ${this.color.g}, ${this.color.b})`);
-                    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-                    ctx.fillStyle = gradient;
-                    ctx.beginPath();
-                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.globalAlpha = 1;
-                }
-            }
-        }
-
-        // Ripple system
-        let ripples = [];
-
-        function addRipple(x, y, intensity) {
-            ripples.push({
-                x: x,
-                y: y,
-                radius: 0,
-                maxRadius: 100 + intensity * 80,
-                intensity: intensity,
-                life: 1
-            });
-
-            if (ripples.length > 30) {
-                ripples = ripples.slice(-30);
-            }
-        }
-
-        function updateRipples() {
-            ripples = ripples.filter(ripple => {
-                ripple.radius += 4;
-                ripple.life -= 0.025;
-                return ripple.life > 0 && ripple.radius < ripple.maxRadius;
-            });
-        }
-
-        function getRippleValue(x, y) {
-            let value = 0;
-            ripples.forEach(ripple => {
-                const dist = Math.hypot(x - ripple.x, y - ripple.y);
-                const rippleWidth = 40;
-                if (Math.abs(dist - ripple.radius) < rippleWidth) {
-                    const wave = Math.sin((dist - ripple.radius) / rippleWidth * Math.PI);
-                    value += wave * ripple.intensity * ripple.life * 3;
-                }
-            });
-            return value;
-        }
-
-        // Resize handler
+        // Resize canvas
         function resize() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-
-            if (videoCanvas) {
-                videoCanvas.width = canvas.width;
-                videoCanvas.height = canvas.height;
-            }
-
-            initDots();
-        }
-
-        // Initialize dots grid
-        function initDots() {
-            dots = [];
-            const spacing = dotSize * 1.5;
-            const cols = Math.ceil(canvas.width / spacing) + 1;
-            const rows = Math.ceil(canvas.height / spacing) + 1;
-
-            for (let row = 0; row < rows; row++) {
-                for (let col = 0; col < cols; col++) {
-                    const x = col * spacing + spacing / 2;
-                    const y = row * spacing + spacing / 2;
-                    dots.push(new Dot(x, y, dotSize));
-                }
-            }
-        }
-
-        // Rebuild dots when dot size changes significantly
-        function rebuildDots() {
-            const spacing = dotSize * 1.5;
-            const cols = Math.ceil(canvas.width / spacing) + 1;
-            const rows = Math.ceil(canvas.height / spacing) + 1;
-            const newDotCount = cols * rows;
-
-            // Only rebuild if significant change
-            if (Math.abs(dots.length - newDotCount) > 50) {
-                dots = [];
-                for (let row = 0; row < rows; row++) {
-                    for (let col = 0; col < cols; col++) {
-                        const x = col * spacing + spacing / 2;
-                        const y = row * spacing + spacing / 2;
-                        dots.push(new Dot(x, y, dotSize));
-                    }
-                }
-            } else {
-                // Just update positions
-                let index = 0;
-                for (let row = 0; row < rows && index < dots.length; row++) {
-                    for (let col = 0; col < cols && index < dots.length; col++) {
-                        dots[index].baseX = col * spacing + spacing / 2;
-                        dots[index].baseY = row * spacing + spacing / 2;
-                        index++;
-                    }
-                }
-            }
+            prevFrameCanvas.width = window.innerWidth;
+            prevFrameCanvas.height = window.innerHeight;
         }
 
         window.addEventListener('resize', resize);
+        resize();
 
         // Initialize MediaPipe Hands
         const hands = new Hands({
@@ -455,9 +118,10 @@
 
         hands.onResults(onHandResults);
 
-        // Hand detection handler
+        // Hand detection results handler
         function onHandResults(results) {
             if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                leftHandPinchDist = null;
                 leftHandPrevPinchDist = null;
                 rightHandPrevPos = null;
                 return;
@@ -468,6 +132,7 @@
 
             results.multiHandLandmarks.forEach((landmarks, index) => {
                 const handedness = results.multiHandedness[index].label;
+                // Mirror the handedness since webcam is mirrored
                 if (handedness === 'Right') {
                     leftHand = landmarks;
                 } else {
@@ -475,14 +140,14 @@
                 }
             });
 
-            // Left hand: pinch to change dot size
+            // Left hand: pinch to zoom (change dot size)
             if (leftHand) {
                 const thumb = leftHand[4];
-                const indexFinger = leftHand[8];
-                const pinchDist = Math.hypot(thumb.x - indexFinger.x, thumb.y - indexFinger.y);
+                const index = leftHand[8];
+                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
 
                 if (leftHandPrevPinchDist !== null) {
-                    const delta = (pinchDist - leftHandPrevPinchDist) * 150;
+                    const delta = (pinchDist - leftHandPrevPinchDist) * 100;
                     targetDotSize = Math.max(minDotSize, Math.min(maxDotSize, targetDotSize + delta));
                 }
 
@@ -493,21 +158,24 @@
 
             // Right hand: swipe to change color
             if (rightHand) {
-                const palm = rightHand[9];
+                const palm = rightHand[9]; // Middle finger MCP as palm center
 
                 if (rightHandPrevPos !== null && swipeCooldown <= 0) {
                     const dx = palm.x - rightHandPrevPos.x;
                     const dy = palm.y - rightHandPrevPos.y;
                     const speed = Math.hypot(dx, dy);
 
-                    if (speed > 0.04) {
+                    if (speed > 0.05) {
+                        // Determine swipe direction
                         if (Math.abs(dx) > Math.abs(dy)) {
+                            // Horizontal swipe
                             if (dx > 0) {
                                 targetColorIndex = (currentColorIndex + 1) % colors.length;
                             } else {
                                 targetColorIndex = (currentColorIndex - 1 + colors.length) % colors.length;
                             }
                         } else {
+                            // Vertical swipe
                             if (dy > 0) {
                                 targetColorIndex = (currentColorIndex + 3) % colors.length;
                             } else {
@@ -515,7 +183,7 @@
                             }
                         }
                         colorTransition = 0;
-                        swipeCooldown = 25;
+                        swipeCooldown = 30;
                     }
                 }
 
@@ -527,68 +195,31 @@
             if (swipeCooldown > 0) swipeCooldown--;
         }
 
-        // Initialize audio
-        async function initAudio() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioContext.createAnalyser();
-                microphone = audioContext.createMediaStreamSource(stream);
-
-                analyser.fftSize = 256;
-                dataArray = new Uint8Array(analyser.frequencyBinCount);
-                microphone.connect(analyser);
-
-                return true;
-            } catch (err) {
-                console.log('Audio not available:', err);
-                return false;
-            }
-        }
-
-        // Get audio volume
-        function getVolume() {
-            if (!analyser) return 0;
-
-            analyser.getByteFrequencyData(dataArray);
-            let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i];
-            }
-            const average = sum / dataArray.length;
-            return (average / 255) * audioSensitivity;
-        }
-
-        // Motion detection
-        function detectMotion(currentData, prevData) {
-            if (!prevData) return [];
-
+        // Detect motion and create ripples
+        function detectMotion(currentImageData, prevImageData) {
             const width = canvas.width;
             const height = canvas.height;
-            const gridSize = 50;
+            const gridSize = 40;
             const motionPoints = [];
-            let totalMotion = 0;
 
             for (let y = 0; y < height; y += gridSize) {
                 for (let x = 0; x < width; x += gridSize) {
                     let motionSum = 0;
                     let count = 0;
 
-                    for (let dy = 0; dy < gridSize && y + dy < height; dy += 8) {
-                        for (let dx = 0; dx < gridSize && x + dx < width; dx += 8) {
+                    for (let dy = 0; dy < gridSize && y + dy < height; dy += 4) {
+                        for (let dx = 0; dx < gridSize && x + dx < width; dx += 4) {
                             const i = ((y + dy) * width + (x + dx)) * 4;
-                            const diff = Math.abs(currentData.data[i] - prevData.data[i]) +
-                                        Math.abs(currentData.data[i + 1] - prevData.data[i + 1]) +
-                                        Math.abs(currentData.data[i + 2] - prevData.data[i + 2]);
+                            const diff = Math.abs(currentImageData.data[i] - prevImageData.data[i]) +
+                                        Math.abs(currentImageData.data[i + 1] - prevImageData.data[i + 1]) +
+                                        Math.abs(currentImageData.data[i + 2] - prevImageData.data[i + 2]);
                             motionSum += diff;
                             count++;
                         }
                     }
 
                     const avgMotion = motionSum / count;
-                    totalMotion += avgMotion;
-
-                    if (avgMotion > 40) {
+                    if (avgMotion > 30) {
                         motionPoints.push({
                             x: x + gridSize / 2,
                             y: y + gridSize / 2,
@@ -598,130 +229,137 @@
                 }
             }
 
-            motionIntensity = Math.min(totalMotion / (width * height) * 10, 1);
             return motionPoints;
         }
 
-        // Color interpolation
-        function lerpColor(c1, c2, t) {
-            return {
-                r: Math.round(c1.r + (c2.r - c1.r) * t),
-                g: Math.round(c1.g + (c2.g - c1.g) * t),
-                b: Math.round(c1.b + (c2.b - c1.b) * t)
-            };
-        }
+        // Add ripples from motion
+        function addRipples(motionPoints) {
+            motionPoints.forEach(point => {
+                if (Math.random() < 0.3) {
+                    ripples.push({
+                        x: point.x,
+                        y: point.y,
+                        radius: 0,
+                        maxRadius: 80 + point.intensity * 60,
+                        intensity: point.intensity,
+                        life: 1
+                    });
+                }
+            });
 
-        // Get brightness from video at position
-        function getBrightness(x, y, imageData) {
-            const mirroredX = canvas.width - x;
-            const sampleX = Math.floor(mirroredX);
-            const sampleY = Math.floor(y);
-
-            if (sampleX >= 0 && sampleX < canvas.width && sampleY >= 0 && sampleY < canvas.height) {
-                const i = (sampleY * canvas.width + sampleX) * 4;
-                const r = imageData.data[i];
-                const g = imageData.data[i + 1];
-                const b = imageData.data[i + 2];
-                return (r + g + b) / 3 / 255;
+            // Limit ripples
+            if (ripples.length > 50) {
+                ripples = ripples.slice(-50);
             }
-            return 0;
         }
 
-        // Draw ripples visualization
-        function drawRipples(ctx) {
-            ripples.forEach(ripple => {
-                ctx.globalAlpha = ripple.life * 0.3;
-                ctx.strokeStyle = `rgb(${currentColor.r}, ${currentColor.g}, ${currentColor.b})`;
-                ctx.lineWidth = 2 + ripple.intensity * 2;
-                ctx.beginPath();
-                ctx.arc(ripple.x, ripple.y, ripple.radius, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.globalAlpha = 1;
+        // Update ripples
+        function updateRipples() {
+            ripples = ripples.filter(ripple => {
+                ripple.radius += 3;
+                ripple.life -= 0.02;
+                return ripple.life > 0 && ripple.radius < ripple.maxRadius;
             });
         }
 
-        // Draw background with gradient
-        function drawBackground(ctx, volume) {
-            const time = Date.now() * 0.001;
-            const pulse = Math.sin(time * 2) * 0.5 + 0.5;
-            const volumePulse = volume * 0.3;
+        // Get ripple offset at position
+        function getRippleOffset(x, y) {
+            let offset = 0;
 
-            const gradient = ctx.createRadialGradient(
-                canvas.width / 2, canvas.height / 2, 0,
-                canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) * 0.8
-            );
+            ripples.forEach(ripple => {
+                const dist = Math.hypot(x - ripple.x, y - ripple.y);
+                const rippleWidth = 30;
 
-            const dimmedR = Math.floor(currentColor.r * (0.05 + volumePulse + pulse * 0.03));
-            const dimmedG = Math.floor(currentColor.g * (0.05 + volumePulse + pulse * 0.03));
-            const dimmedB = Math.floor(currentColor.b * (0.05 + volumePulse + pulse * 0.03));
+                if (Math.abs(dist - ripple.radius) < rippleWidth) {
+                    const wave = Math.sin((dist - ripple.radius) / rippleWidth * Math.PI);
+                    offset += wave * ripple.intensity * ripple.life * 4;
+                }
+            });
 
-            gradient.addColorStop(0, `rgba(${dimmedR}, ${dimmedG}, ${dimmedB}, 0.3)`);
-            gradient.addColorStop(0.5, `rgba(${Math.floor(dimmedR * 0.5)}, ${Math.floor(dimmedG * 0.5)}, ${Math.floor(dimmedB * 0.5)}, 0.15)`);
-            gradient.addColorStop(1, 'rgba(0, 0, 0, 1)');
-
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            return offset;
         }
 
-        // Update UI indicators
-        function updateUI() {
-            const colorPreview = document.getElementById('colorPreview');
-            const colorName = document.getElementById('colorName');
-            const sizeBarFill = document.getElementById('sizeBarFill');
-
-            const color = colors[currentColorIndex];
-            colorPreview.style.backgroundColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
-            colorPreview.style.color = `rgb(${color.r}, ${color.g}, ${color.b})`;
-            colorName.textContent = color.name;
-
-            const sizePercent = ((dotSize - minDotSize) / (maxDotSize - minDotSize)) * 100;
-            sizeBarFill.style.width = `${sizePercent}%`;
+        // Interpolate colors
+        function lerpColor(color1, color2, t) {
+            return [
+                Math.round(color1[0] + (color2[0] - color1[0]) * t),
+                Math.round(color1[1] + (color2[1] - color1[1]) * t),
+                Math.round(color1[2] + (color2[2] - color1[2]) * t)
+            ];
         }
 
-        // Main render loop
-        async function render() {
-            if (!isRunning) return;
+        // Draw halftone effect
+        function drawHalftone(imageData) {
+            const width = canvas.width;
+            const height = canvas.height;
 
-            // Get audio volume first
-            currentVolume = getVolume();
-
-            // Draw background with gradient and pulse
-            drawBackground(ctx, currentVolume);
+            // Clear to black
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
 
             // Smooth dot size transition
-            const prevDotSize = dotSize;
-            dotSize += (targetDotSize - dotSize) * 0.08;
-
-            // Rebuild dots if size changed significantly
-            if (Math.abs(dotSize - prevDotSize) > 0.5) {
-                rebuildDots();
-            }
+            dotSize += (targetDotSize - dotSize) * 0.1;
 
             // Smooth color transition
             if (currentColorIndex !== targetColorIndex) {
-                colorTransition += 0.03;
+                colorTransition += 0.02;
                 if (colorTransition >= 1) {
                     colorTransition = 0;
                     currentColorIndex = targetColorIndex;
-                    currentColor = { ...colors[currentColorIndex] };
+                    currentColor = [...colors[currentColorIndex]];
                 } else {
                     currentColor = lerpColor(colors[currentColorIndex], colors[targetColorIndex], colorTransition);
                 }
             }
 
-            // Update UI
-            updateUI();
+            const spacing = dotSize * 1.5;
+            const data = imageData.data;
 
-            // Update and draw particles
-            particles = particles.filter(p => {
-                p.update();
-                p.draw(ctx);
-                return p.life > 0;
-            });
+            for (let y = spacing / 2; y < height; y += spacing) {
+                for (let x = spacing / 2; x < width; x += spacing) {
+                    // Get brightness at this point (mirrored)
+                    const mirroredX = width - x;
+                    const sampleX = Math.floor(mirroredX);
+                    const sampleY = Math.floor(y);
 
-            // Process video
+                    if (sampleX >= 0 && sampleX < width && sampleY >= 0 && sampleY < height) {
+                        const i = (sampleY * width + sampleX) * 4;
+                        const r = data[i];
+                        const g = data[i + 1];
+                        const b = data[i + 2];
+                        const brightness = (r + g + b) / 3 / 255;
+
+                        // Get ripple effect
+                        const rippleOffset = getRippleOffset(x, y);
+
+                        // Calculate dot radius based on brightness
+                        const maxRadius = (dotSize / 2) * 0.95;
+                        let radius = brightness * maxRadius + rippleOffset;
+                        radius = Math.max(0, Math.min(maxRadius, radius));
+
+                        if (radius > 0.5) {
+                            ctx.beginPath();
+                            ctx.arc(x, y, radius, 0, Math.PI * 2);
+                            ctx.fillStyle = `rgb(${currentColor[0]}, ${currentColor[1]}, ${currentColor[2]})`;
+                            ctx.fill();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Main render loop
+        let prevImageData = null;
+
+        async function render() {
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                // Draw video to offscreen canvas
+                // Draw video to hidden canvas for processing
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = canvas.width;
+                tempCanvas.height = canvas.height;
+                const tempCtx = tempCanvas.getContext('2d');
+
+                // Draw and scale video to fill canvas
                 const videoAspect = video.videoWidth / video.videoHeight;
                 const canvasAspect = canvas.width / canvas.height;
 
@@ -739,57 +377,23 @@
                     drawY = (canvas.height - drawHeight) / 2;
                 }
 
-                videoCtx.drawImage(video, drawX, drawY, drawWidth, drawHeight);
-                const imageData = videoCtx.getImageData(0, 0, canvas.width, canvas.height);
+                tempCtx.drawImage(video, drawX, drawY, drawWidth, drawHeight);
+                const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
 
-                // Detect motion and add ripples
-                const motionPoints = detectMotion(imageData, prevImageData);
-                motionPoints.forEach(point => {
-                    if (Math.random() < 0.2) {
-                        addRipple(point.x, point.y, point.intensity);
-                    }
-                });
-
-                prevImageData = imageData;
+                // Detect motion
+                if (prevImageData) {
+                    const motionPoints = detectMotion(imageData, prevImageData);
+                    addRipples(motionPoints);
+                }
 
                 // Update ripples
                 updateRipples();
 
-                // Update and draw dots
-                const spacing = dotSize * 1.5;
-                dots.forEach((dot, index) => {
-                    // Recalculate position based on current spacing
-                    const cols = Math.ceil(canvas.width / spacing) + 1;
-                    const row = Math.floor(index / cols);
-                    const col = index % cols;
+                // Draw halftone
+                drawHalftone(imageData);
 
-                    dot.baseX = col * spacing + spacing / 2;
-                    dot.baseY = row * spacing + spacing / 2;
-
-                    const brightness = getBrightness(dot.baseX, dot.baseY, imageData);
-                    const rippleValue = getRippleValue(dot.baseX, dot.baseY);
-
-                    // Store previous offset for particle trail
-                    const prevOffsetX = dot.offsetX;
-                    const prevOffsetY = dot.offsetY;
-
-                    dot.update(brightness, currentVolume, rippleValue);
-
-                    // Generate particles for high-energy dots
-                    const combinedIntensity = Math.max(currentVolume, motionIntensity * 0.5);
-                    if (combinedIntensity > 0.3 && brightness > 0.5 && Math.random() < 0.05) {
-                        particles.push(new Particle(
-                            dot.baseX + dot.offsetX,
-                            dot.baseY + dot.offsetY,
-                            dot.color
-                        ));
-                    }
-
-                    dot.draw(ctx, dotSize);
-                });
-
-                // Draw ripples on top
-                drawRipples(ctx);
+                // Store current frame for motion detection
+                prevImageData = imageData;
 
                 // Process hands
                 await hands.send({ image: video });
@@ -799,7 +403,7 @@
         }
 
         // Initialize camera
-        async function initCamera() {
+        async function init() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
@@ -810,48 +414,17 @@
                 });
 
                 video.srcObject = stream;
-
-                return new Promise(resolve => {
-                    video.onloadedmetadata = () => {
-                        video.play();
-                        resolve(true);
-                    };
-                });
+                video.onloadedmetadata = () => {
+                    video.play();
+                    render();
+                };
             } catch (err) {
                 console.error('Camera access denied:', err);
-                return false;
             }
         }
 
         // Start application
-        async function start() {
-            // Setup offscreen video canvas
-            videoCanvas = document.createElement('canvas');
-            videoCtx = videoCanvas.getContext('2d');
-
-            // Resize and init
-            resize();
-
-            // Init camera
-            const cameraOk = await initCamera();
-            if (!cameraOk) return;
-
-            // Init audio (optional)
-            await initAudio();
-
-            // Hide hint after 5 seconds
-            setTimeout(() => {
-                const hint = document.getElementById('start-hint');
-                hint.classList.remove('show');
-            }, 5000);
-
-            // Start rendering
-            isRunning = true;
-            render();
-        }
-
-        // Initialize
-        start();
+        init();
 
         // Fullscreen on click
         document.body.addEventListener('click', () => {
@@ -860,6 +433,7 @@
             }
         });
 
+        // Handle fullscreen change
         document.addEventListener('fullscreenchange', resize);
     </script>
 </body>
