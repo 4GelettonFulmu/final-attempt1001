@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Halftone Hand Interaction</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #video {
+            display: none;
+        }
+
+        #canvas {
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+        }
+
+        .start-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            cursor: pointer;
+            transition: opacity 0.8s ease;
+        }
+
+        .start-icon {
+            width: 120px;
+            height: 120px;
+            border: 4px solid #e94560;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            animation: pulse 2s infinite;
+            position: relative;
+        }
+
+        .start-icon::before {
+            content: '';
+            position: absolute;
+            width: 150px;
+            height: 150px;
+            border: 2px solid rgba(233, 69, 96, 0.3);
+            border-radius: 50%;
+            animation: ripple 2s infinite;
+        }
+
+        .start-icon::after {
+            content: '';
+            width: 0;
+            height: 0;
+            border-left: 40px solid #e94560;
+            border-top: 25px solid transparent;
+            border-bottom: 25px solid transparent;
+            margin-left: 10px;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+
+        @keyframes ripple {
+            0% { transform: scale(0.8); opacity: 1; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+
+        .hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .controls-info {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            z-index: 50;
+            text-align: center;
+            border: 2px solid rgba(233, 69, 96, 0.5);
+        }
+
+        .controls-info h3 {
+            margin-bottom: 10px;
+            color: #e94560;
+        }
+
+        .controls-info p {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="start-overlay" id="startOverlay">
+        <div class="start-icon"></div>
+    </div>
+
+    <video id="video" playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <div class="controls-info">
+        <h3>Hand Controls</h3>
+        <p><strong>Left Hand:</strong> Move forward/backward to control halftone size</p>
+        <p><strong>Right Hand:</strong> Move position to control colors</p>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.min.js"></script>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startOverlay = document.getElementById('startOverlay');
+
+        // State
+        let handsData = [];
+        let particles = [];
+        let ripples = [];
+        let dotSize = 8;
+        let patternMode = 0;
+        let globalHue = 0;
+        let time = 0;
+        let lastGestureTime = 0;
+        let backgroundPatterns = [];
+
+        // New control states
+        let leftHandDepth = 0;
+        let rightHandHue = 180;
+        let colorShift = 0;
+
+        // Offscreen canvas for performance
+        let offCanvas, offCtx;
+
+        // Resize canvas
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            offCanvas = document.createElement('canvas');
+            offCanvas.width = canvas.width;
+            offCanvas.height = canvas.height;
+            offCtx = offCanvas.getContext('2d');
+
+            // Initialize background patterns
+            backgroundPatterns = [];
+            for (let i = 0; i < 50; i++) {
+                backgroundPatterns.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    size: Math.random() * 3 + 1,
+                    speed: Math.random() * 0.5 + 0.1,
+                    angle: Math.random() * Math.PI * 2
+                });
+            }
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Particle class
+        class Particle {
+            constructor(x, y, color, type = 'normal') {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.size = type === 'explosion' ? Math.random() * 20 + 10 : Math.random() * 12 + 3;
+                const speed = type === 'explosion' ? 8 : 3;
+                const angle = Math.random() * Math.PI * 2;
+                this.speedX = Math.cos(angle) * speed * Math.random();
+                this.speedY = Math.sin(angle) * speed * Math.random();
+                this.color = color;
+                this.life = 1;
+                this.decay = type === 'explosion' ? 0.015 : 0.025;
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotationSpeed = (Math.random() - 0.5) * 0.2;
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.speedY += 0.1; // gravity
+                this.life -= this.decay;
+                this.size *= 0.97;
+                this.rotation += this.rotationSpeed;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.life * 0.8;
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+
+                if (this.type === 'explosion') {
+                    // Star shape for explosions
+                    ctx.beginPath();
+                    for (let i = 0; i < 5; i++) {
+                        const angle = (i * Math.PI * 2) / 5 - Math.PI / 2;
+                        const innerAngle = angle + Math.PI / 5;
+                        if (i === 0) {
+                            ctx.moveTo(Math.cos(angle) * this.size, Math.sin(angle) * this.size);
+                        } else {
+                            ctx.lineTo(Math.cos(angle) * this.size, Math.sin(angle) * this.size);
+                        }
+                        ctx.lineTo(Math.cos(innerAngle) * this.size * 0.4, Math.sin(innerAngle) * this.size * 0.4);
+                    }
+                    ctx.closePath();
+                    ctx.fillStyle = this.color;
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+        }
+
+        // Ripple class
+        class Ripple {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = 10;
+                this.maxRadius = 200;
+                this.color = color;
+                this.life = 1;
+            }
+
+            update() {
+                this.radius += 5;
+                this.life = 1 - this.radius / this.maxRadius;
+            }
+
+            draw() {
+                if (this.life <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = this.life * 0.5;
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        // Gesture detection
+        function detectGesture(landmarks) {
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            const thumbBase = landmarks[2];
+            const indexBase = landmarks[5];
+            const middleBase = landmarks[9];
+            const ringBase = landmarks[13];
+            const pinkyBase = landmarks[17];
+
+            // Pinch detection
+            const pinchDist = distance(thumbTip, indexTip);
+            const isPinching = pinchDist < 0.06;
+
+            // Fist detection
+            const fingersCurled =
+                indexTip.y > indexBase.y &&
+                middleTip.y > middleBase.y &&
+                ringTip.y > ringBase.y &&
+                pinkyTip.y > pinkyBase.y;
+            const isFist = fingersCurled;
+
+            // Spread detection (all fingers extended and spread)
+            const fingersExtended =
+                indexTip.y < indexBase.y &&
+                middleTip.y < middleBase.y &&
+                ringTip.y < ringBase.y &&
+                pinkyTip.y < pinkyBase.y;
+
+            const fingerSpread =
+                distance(indexTip, middleTip) > 0.08 &&
+                distance(middleTip, ringTip) > 0.06 &&
+                distance(ringTip, pinkyTip) > 0.05;
+
+            const isSpread = fingersExtended && fingerSpread;
+
+            // Peace sign
+            const isPeace =
+                indexTip.y < indexBase.y &&
+                middleTip.y < middleBase.y &&
+                ringTip.y > ringBase.y &&
+                pinkyTip.y > pinkyBase.y;
+
+            return { isPinching, isFist, isSpread, isPeace, pinchDist };
+        }
+
+        function distance(p1, p2) {
+            return Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+        }
+
+        // HSL to RGB
+        function hslToRgb(h, s, l) {
+            let r, g, b;
+            if (s === 0) {
+                r = g = b = l;
+            } else {
+                const hue2rgb = (p, q, t) => {
+                    if (t < 0) t += 1;
+                    if (t > 1) t -= 1;
+                    if (t < 1/6) return p + (q - p) * 6 * t;
+                    if (t < 1/2) return q;
+                    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                    return p;
+                };
+                const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                const p = 2 * l - q;
+                r = hue2rgb(p, q, h + 1/3);
+                g = hue2rgb(p, q, h);
+                b = hue2rgb(p, q, h - 1/3);
+            }
+            return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+        }
+
+        // Draw different halftone patterns
+        function drawHalftone(imageData) {
+            const spacing = dotSize + 2;
+            const width = canvas.width;
+            const height = canvas.height;
+            const data = imageData.data;
+
+            // Calculate hand influence areas
+            const handAreas = handsData.map(hand => ({
+                x: (1 - hand.landmarks[9].x) * width,
+                y: hand.landmarks[9].y * height,
+                hue: hand.hue
+            }));
+
+            for (let y = 0; y < height; y += spacing) {
+                for (let x = 0; x < width; x += spacing) {
+                    const pixelIndex = (Math.floor(y) * width + Math.floor(x)) * 4;
+                    const r = data[pixelIndex];
+                    const g = data[pixelIndex + 1];
+                    const b = data[pixelIndex + 2];
+
+                    const brightness = (r + g + b) / 3 / 255;
+                    let radius = (1 - brightness) * (dotSize / 2) * 1.5;
+
+                    if (radius < 0.5) continue;
+
+                    // Mix color based on hand proximity and right hand color control
+                    let mixFactor = 0;
+                    let closestHue = globalHue;
+
+                    handAreas.forEach(area => {
+                        const dist = Math.sqrt((x - area.x) ** 2 + (y - area.y) ** 2);
+                        const factor = Math.max(0, 1 - dist / 300);
+                        if (factor > mixFactor) {
+                            mixFactor = factor;
+                            closestHue = area.hue;
+                        }
+                    });
+
+                    // Apply right hand color control - shift the entire color spectrum
+                    const shiftedHue = (closestHue + colorShift) % 360;
+
+                    // Wave distortion near hands
+                    let offsetX = 0, offsetY = 0;
+                    handAreas.forEach(area => {
+                        const dist = Math.sqrt((x - area.x) ** 2 + (y - area.y) ** 2);
+                        if (dist < 200) {
+                            const wave = Math.sin(dist * 0.05 - time * 0.1) * (1 - dist / 200) * 10;
+                            offsetX += wave;
+                            offsetY += wave;
+                        }
+                    });
+
+                    const baseColor = hslToRgb(shiftedHue / 360, 0.8, 0.5);
+                    const finalR = Math.floor(r * (1 - mixFactor) + baseColor.r * mixFactor);
+                    const finalG = Math.floor(g * (1 - mixFactor) + baseColor.g * mixFactor);
+                    const finalB = Math.floor(b * (1 - mixFactor) + baseColor.b * mixFactor);
+
+                    ctx.fillStyle = `rgb(${finalR}, ${finalG}, ${finalB})`;
+
+                    const drawX = x + offsetX;
+                    const drawY = y + offsetY;
+
+                    // Different patterns
+                    switch (patternMode) {
+                        case 0: // Circles
+                            ctx.beginPath();
+                            ctx.arc(drawX, drawY, radius, 0, Math.PI * 2);
+                            ctx.fill();
+                            break;
+                        case 1: // Squares
+                            ctx.fillRect(drawX - radius, drawY - radius, radius * 2, radius * 2);
+                            break;
+                        case 2: // Diamonds
+                            ctx.save();
+                            ctx.translate(drawX, drawY);
+                            ctx.rotate(Math.PI / 4);
+                            ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+                            ctx.restore();
+                            break;
+                        case 3: // Lines
+                            ctx.lineWidth = radius;
+                            ctx.strokeStyle = `rgb(${finalR}, ${finalG}, ${finalB})`;
+                            ctx.beginPath();
+                            ctx.moveTo(drawX - radius, drawY);
+                            ctx.lineTo(drawX + radius, drawY);
+                            ctx.stroke();
+                            break;
+                    }
+                }
+            }
+        }
+
+        // Draw hand visualization
+        function drawHands() {
+            handsData.forEach((hand, handIndex) => {
+                const landmarks = hand.landmarks;
+                const gesture = hand.gesture;
+                const hue = hand.hue;
+
+                // Update pattern based on gestures
+                if (gesture.isPeace && Date.now() - lastGestureTime > 500) {
+                    patternMode = (patternMode + 1) % 4;
+                    lastGestureTime = Date.now();
+                }
+
+                // Original pinch control for backwards compatibility
+                if (gesture.isPinching && !hand.isLeft && !hand.isRight) {
+                    dotSize = Math.max(3, dotSize - 0.3);
+                } else if (!hand.isLeft) {
+                    dotSize = Math.min(12, dotSize + 0.05);
+                }
+
+                // Fist creates explosion
+                if (gesture.isFist && Date.now() - hand.lastFistTime > 800) {
+                    const palmX = (1 - landmarks[9].x) * canvas.width;
+                    const palmY = landmarks[9].y * canvas.height;
+
+                    for (let i = 0; i < 30; i++) {
+                        particles.push(new Particle(palmX, palmY, `hsl(${(hue + colorShift) % 360}, 80%, 60%)`, 'explosion'));
+                    }
+                    ripples.push(new Ripple(palmX, palmY, `hsl(${(hue + colorShift) % 360}, 80%, 60%)`));
+                    hand.lastFistTime = Date.now();
+                }
+
+                // Spread fingers creates ripple
+                if (gesture.isSpread && Date.now() - hand.lastSpreadTime > 300) {
+                    const palmX = (1 - landmarks[9].x) * canvas.width;
+                    const palmY = landmarks[9].y * canvas.height;
+                    ripples.push(new Ripple(palmX, palmY, `hsl(${(hue + colorShift) % 360}, 70%, 70%)`));
+                    hand.lastSpreadTime = Date.now();
+                }
+
+                // Draw finger tips with enhanced halftone circles
+                const fingerTips = [4, 8, 12, 16, 20];
+                fingerTips.forEach((tipIndex, i) => {
+                    const tip = landmarks[tipIndex];
+                    const tipX = (1 - tip.x) * canvas.width;
+                    const tipY = tip.y * canvas.height;
+
+                    // Glow effect
+                    const gradient = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, 40);
+                    gradient.addColorStop(0, `hsla(${((hue + i * 30) % 360 + colorShift) % 360}, 80%, 60%, 0.4)`);
+                    gradient.addColorStop(1, 'transparent');
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.arc(tipX, tipY, 40, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Concentric rings
+                    const rings = gesture.isPinching ? 6 : 4;
+                    for (let r = rings; r >= 0; r--) {
+                        const radius = (r + 1) * (gesture.isPinching ? 6 : 5);
+                        const pulse = Math.sin(time * 0.1 + r * 0.5) * 2;
+
+                        ctx.beginPath();
+                        ctx.arc(tipX, tipY, radius + pulse, 0, Math.PI * 2);
+                        ctx.fillStyle = `hsla(${((hue + i * 30 + r * 10) % 360 + colorShift) % 360}, 80%, ${50 + r * 8}%, ${0.2 + r * 0.1})`;
+                        ctx.fill();
+                    }
+
+                    // Spawn particles from fingertips
+                    if (Math.random() > 0.6) {
+                        particles.push(new Particle(tipX, tipY, `hsl(${((hue + i * 30) % 360 + colorShift) % 360}, 80%, 60%)`));
+                    }
+                });
+
+                // Draw skeleton with dotted lines
+                const connections = [
+                    [0, 1], [1, 2], [2, 3], [3, 4],
+                    [0, 5], [5, 6], [6, 7], [7, 8],
+                    [5, 9], [9, 10], [10, 11], [11, 12],
+                    [9, 13], [13, 14], [14, 15], [15, 16],
+                    [13, 17], [17, 18], [18, 19], [19, 20],
+                    [0, 17]
+                ];
+
+                connections.forEach(([i, j]) => {
+                    const p1 = landmarks[i];
+                    const p2 = landmarks[j];
+                    const x1 = (1 - p1.x) * canvas.width;
+                    const y1 = p1.y * canvas.height;
+                    const x2 = (1 - p2.x) * canvas.width;
+                    const y2 = p2.y * canvas.height;
+
+                    const dist = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+                    const dots = Math.floor(dist / 6);
+
+                    for (let d = 0; d <= dots; d++) {
+                        const t = d / dots;
+                        const dx = x1 + (x2 - x1) * t;
+                        const dy = y1 + (y2 - y1) * t;
+                        const size = 2 + Math.sin(time * 0.05 + d * 0.3) * 1;
+
+                        ctx.beginPath();
+                        ctx.arc(dx, dy, size, 0, Math.PI * 2);
+                        ctx.fillStyle = `hsla(${(hue + colorShift) % 360}, 70%, 70%, 0.6)`;
+                        ctx.fill();
+                    }
+                });
+
+                // Draw palm aura
+                const palmX = (1 - landmarks[9].x) * canvas.width;
+                const palmY = landmarks[9].y * canvas.height;
+
+                const auraGradient = ctx.createRadialGradient(palmX, palmY, 0, palmX, palmY, 100);
+                auraGradient.addColorStop(0, `hsla(${(hue + colorShift) % 360}, 70%, 50%, 0.3)`);
+                auraGradient.addColorStop(0.5, `hsla(${(hue + colorShift) % 360}, 70%, 50%, 0.1)`);
+                auraGradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = auraGradient;
+                ctx.beginPath();
+                ctx.arc(palmX, palmY, 100 + Math.sin(time * 0.05) * 20, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        // Draw background animation
+        function drawBackground() {
+            // Apply color shift to background as well
+            const bgColor = hslToRgb((colorShift % 360) / 360, 0.1, 0.04);
+            ctx.fillStyle = `rgb(${bgColor.r}, ${bgColor.g}, ${bgColor.b})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Animated background dots
+            backgroundPatterns.forEach(p => {
+                p.x += Math.cos(p.angle) * p.speed;
+                p.y += Math.sin(p.angle) * p.speed;
+
+                // Wrap around
+                if (p.x < 0) p.x = canvas.width;
+                if (p.x > canvas.width) p.x = 0;
+                if (p.y < 0) p.y = canvas.height;
+                if (p.y > canvas.height) p.y = 0;
+
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                const dotColor = hslToRgb((colorShift % 360) / 360, 0.3, 0.5);
+                ctx.fillStyle = `rgba(${dotColor.r}, ${dotColor.g}, ${dotColor.b}, 0.1)`;
+                ctx.fill();
+            });
+        }
+
+        // Main render loop
+        function render() {
+            time++;
+
+            drawBackground();
+
+            // Draw video with halftone effect
+            if (video.readyState >= 2) {
+                const videoAspect = video.videoWidth / video.videoHeight;
+                const canvasAspect = canvas.width / canvas.height;
+
+                let drawWidth, drawHeight, offsetX, offsetY;
+
+                if (canvasAspect > videoAspect) {
+                    drawWidth = canvas.width;
+                    drawHeight = canvas.width / videoAspect;
+                    offsetX = 0;
+                    offsetY = (canvas.height - drawHeight) / 2;
+                } else {
+                    drawHeight = canvas.height;
+                    drawWidth = canvas.height * videoAspect;
+                    offsetX = (canvas.width - drawWidth) / 2;
+                    offsetY = 0;
+                }
+
+                // Mirror and draw video to offscreen canvas
+                offCtx.clearRect(0, 0, canvas.width, canvas.height);
+                offCtx.translate(canvas.width, 0);
+                offCtx.scale(-1, 1);
+                offCtx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+                offCtx.setTransform(1, 0, 0, 1, 0, 0);
+
+                const imageData = offCtx.getImageData(0, 0, canvas.width, canvas.height);
+                drawHalftone(imageData);
+            }
+
+            // Update and draw ripples
+            ripples = ripples.filter(r => r.life > 0);
+            ripples.forEach(r => {
+                r.update();
+                r.draw();
+            });
+
+            // Update and draw particles
+            particles = particles.filter(p => p.life > 0);
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+
+            // Draw hands
+            drawHands();
+
+            // Vignette effect
+            const vignetteGradient = ctx.createRadialGradient(
+                canvas.width / 2, canvas.height / 2, canvas.height * 0.3,
+                canvas.width / 2, canvas.height / 2, canvas.height * 0.8
+            );
+            vignetteGradient.addColorStop(0, 'transparent');
+            vignetteGradient.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
+            ctx.fillStyle = vignetteGradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            requestAnimationFrame(render);
+        }
+
+        // Initialize MediaPipe Hands
+        async function initHands() {
+            const hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
+                }
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults((results) => {
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    handsData = results.multiHandLandmarks.map((landmarks, index) => {
+                        const existing = handsData[index] || {};
+                        const gesture = detectGesture(landmarks);
+                        const palm = landmarks[9];
+                        const hue = (1 - palm.y) * 360;
+
+                        // Determine if this is left or right hand
+                        const handedness = results.multiHandedness && results.multiHandedness[index]
+                            ? results.multiHandedness[index].label
+                            : null;
+
+                        const isLeft = handedness === 'Left';
+                        const isRight = handedness === 'Right';
+
+                        // Left hand controls dot size based on depth (z coordinate)
+                        if (isLeft) {
+                            // Use palm z-coordinate (depth) - negative z means closer to camera
+                            // Normalize z from approximately -0.1 to 0.1 to dotSize range 3-20
+                            const zDepth = landmarks[9].z;
+                            leftHandDepth = zDepth;
+                            // Map z-depth: closer (more negative) = smaller dots, farther (more positive) = larger dots
+                            dotSize = Math.max(3, Math.min(20, 10 + zDepth * 50));
+                        }
+
+                        // Right hand controls color based on position
+                        if (isRight) {
+                            // Use palm x and y position to control hue
+                            // x controls main hue shift (0-360 degrees)
+                            rightHandHue = palm.x * 360;
+                            colorShift = rightHandHue;
+                        }
+
+                        return {
+                            landmarks,
+                            gesture,
+                            hue,
+                            isLeft,
+                            isRight,
+                            lastFistTime: existing.lastFistTime || 0,
+                            lastSpreadTime: existing.lastSpreadTime || 0
+                        };
+                    });
+
+                    // Update global hue
+                    if (handsData.length > 0) {
+                        globalHue = handsData[0].hue;
+                    }
+                } else {
+                    handsData = [];
+                }
+            });
+
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await hands.send({ image: video });
+                },
+                width: 1280,
+                height: 720
+            });
+
+            await camera.start();
+            render();
+        }
+
+        // Start on click
+        startOverlay.addEventListener('click', async () => {
+            startOverlay.classList.add('hidden');
+            await initHands();
+        });
+    </script>
+</body>
+</html>
